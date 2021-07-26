@@ -43,17 +43,17 @@ class Bundle(TimestampedModel):
     :min_value: Minimum value of a bundle range.
     :max_value: Maximum value of a bundle range.
     :bundle_per: Bundle percentage.
-    :referal_per: Referal percentage which a account gets.
-    :referal_breakeven_lvl: Referal breakeven level which a referal is active to transfer.
+    :referral_per: Referral percentage which a account gets.
+    :referral_breakeven_lvl: Referral breakeven level which a referral is active to transfer.
     """
 
     name = models.CharField(verbose_name='Name', max_length=50, unique=True)
     min_value = models.PositiveSmallIntegerField(verbose_name='Minimum Value')
     max_value = models.PositiveSmallIntegerField(verbose_name='Maximum Value')
     bundle_per = models.FloatField(verbose_name='Bundle Percentage %')
-    referal_per = models.FloatField(verbose_name='Referal Percentage %')
-    referal_breakeven_lvl = models.FloatField(
-        verbose_name='Referal Breakeven Level %')
+    referral_per = models.FloatField(verbose_name='Referral Percentage %')
+    referral_breakeven_lvl = models.FloatField(
+        verbose_name='Referral Breakeven Level %')
 
     def __str__(self):
         return self.name
@@ -76,7 +76,6 @@ class Account(TimestampedModel):
     :bundle: A connection to Bundle model. Bundle which a account belongs to.
     :vod_cash_number: Account's vodafone cash mobile number.
     :last_contacted: Date and time of last contact with a account.
-    :refered_by: A connection to Account model. Another account who refered this account.
     :comment: System comment on a account.
     """
 
@@ -95,13 +94,11 @@ class Account(TimestampedModel):
         AccountType, verbose_name='Account Type', on_delete=models.CASCADE)
     date_of_investment = models.DateField(verbose_name='Date of Investment')
     bundle = models.ForeignKey(
-        Bundle, verbose_name='Bundle', on_delete=models.CASCADE)
+        Bundle, verbose_name='Bundle', on_delete=models.CASCADE, editable=False, max_length=50, blank=True, null=True)
     vod_cash_number = PhoneNumberField(
         verbose_name='Vodafone Cash Mobile Number', blank=True, null=True)
-    last_contact_date = models.DateTimeField(
+    last_contacted = models.DateTimeField(
         verbose_name='Last Contact', blank=True, null=True)
-    refered_by = models.ForeignKey(
-        Account, verbose_name='Refered By', on_delete=models.CASCADE, blank=True, null=True)
     comment = models.TextField(blank=True, null=True)
 
     @property
@@ -113,6 +110,19 @@ class Account(TimestampedModel):
             return f'{f} {m}.{l}'
         else:
             return f'{f} {l}'
+
+    @property
+    def VodCash(self):
+        if self.vod_cash_number:
+            return True
+        else:
+            return False
+
+    @property
+    def Age(self):
+        import datetime
+        age = int((datetime.date.today() - self.date_of_birth).days / 365.25)
+        return age
 
     def __str__(self):
         return f'{self.account_id} | {self.name}'
@@ -145,6 +155,8 @@ class Transaction(TimestampedModel):
     :amount_EGP: Transaction amount in EGP.
     :rate: USD to EGP rate.
     :amount_USD: Transaction amount in USD.
+    :active: Transaction active flag.
+    :paid: Transaction paid flag.
     """
 
     account = models.ForeignKey(
@@ -156,6 +168,8 @@ class Transaction(TimestampedModel):
     rate = models.FloatField(verbose_name='USD/EGP rate')
     amount_USD = models.FloatField(
         verbose_name='Amount USD', blank=True, null=True)
+    active = models.BooleanField(verbose_name='Active', default=True)
+    paid = models.BooleanField(verbose_name='Paid', default=False)
 
     def clean(self):
         if not self.amount_EGP and not self.amount_USD:
@@ -169,6 +183,30 @@ class Transaction(TimestampedModel):
         if not self.amount_USD:
             self.amount_USD = self.amount_EGP / self.rate
         return super().save(*args, **kwargs)
+
+
+class Referral(TimestampedModel):
+    """
+    A model to contain information about referral.
+
+    :customer: A connection to Account model. Customer refered by current account.
+    :referred_by: A connection to Account model. Account which refered to a customer.
+    :referral_bonus: Referral bonus,
+                    referred_by account earns when a customer reaches referral_breakeven_lvl of his bundle.
+    :bonus_trans: A connection to Transaction. Bonus inactive transaction.
+    """
+
+    customer = models.ForeignKey(
+        Account, related_name='customer', verbose_name='Customer', on_delete=models.CASCADE)
+    referred_by = models.ForeignKey(
+        Account, related_name='referred_by', verbose_name='Referred By', on_delete=models.CASCADE)
+    referral_bonus = models.FloatField(
+        verbose_name='Referral Bonus', editable=False)
+    bonus_trans = models.OneToOneField(
+        Transaction, verbose_name='Bonus Transaction', on_delete=models.CASCADE, editable=False, blank=True, null=True)
+
+    def __str__(self):
+        return f'{self.referred_by.customer_id} -> {self.customer.customer_id}'
 
 
 class Balance(TimestampedModel):
