@@ -69,6 +69,7 @@ class Account(TimestampedModel):
     :last_name: Account's last name.
     :date_of_birth: Account's date of birth.
     :email: Account's email.
+    :national_id: Account's national ID image.
     :mobile: Account's mobile number.
     :address: Account's address.
     :account_type: A connection to AccountType model. Account's Type in the system.
@@ -85,8 +86,10 @@ class Account(TimestampedModel):
     mid_name = models.CharField(
         verbose_name='Middle Name', max_length=50, blank=True, null=True)
     last_name = models.CharField(verbose_name='Last Name', max_length=50)
-    date_of_birth = models.DateField(verbose_name='Date of Birth')
+    date_of_birth = models.DateField(
+        verbose_name='Date of Birth', blank=True, null=True)
     email = models.EmailField(verbose_name='Email', max_length=254)
+    national_id = models.ImageField(verbose_name='National ID')
     mobile = PhoneNumberField(verbose_name='Mobile Number')
     address = models.CharField(
         verbose_name='Address', max_length=250, blank=True, null=True)
@@ -94,7 +97,7 @@ class Account(TimestampedModel):
         AccountType, verbose_name='Account Type', on_delete=models.CASCADE)
     date_of_investment = models.DateField(verbose_name='Date of Investment')
     bundle = models.ForeignKey(
-        Bundle, verbose_name='Bundle', on_delete=models.CASCADE, editable=False, max_length=50, blank=True, null=True)
+        Bundle, verbose_name='Bundle', on_delete=models.CASCADE, max_length=50, blank=True, null=True)
     vod_cash_number = PhoneNumberField(
         verbose_name='Vodafone Cash Mobile Number', blank=True, null=True)
     last_contacted = models.DateTimeField(
@@ -103,11 +106,11 @@ class Account(TimestampedModel):
 
     @property
     def Name(self):
-        f = f'{self.first_name[0].cap()}{self.first_name[1:]}'
-        l = f'{self.last_name[0].cap()}{self.last_name[1:]}'
+        f = f'{self.first_name[0].upper()}{self.first_name[1:]}'
+        l = f'{self.last_name[0].upper()}{self.last_name[1:]}'
         if self.mid_name:
-            m = f'{self.mid_name[0].cap()}.'
-            return f'{f} {m}.{l}'
+            m = f'{self.mid_name[0].upper()}'
+            return f'{f} {m}. {l}'
         else:
             return f'{f} {l}'
 
@@ -125,10 +128,51 @@ class Account(TimestampedModel):
         return age
 
     def __str__(self):
-        return f'{self.account_id} | {self.name}'
+        return f'{self.account_id} | {self.Name}'
 
     def save(self, *args, **kwargs):
-        self.account_id = self.account_type.name[0].cap() + str(self.id)
+        if not self.id:
+            super().save(*args, **kwargs)
+
+        self.account_id = self.account_type.name[0].upper() + str(self.id)
+        return super().save(*args, **kwargs)
+
+
+class Balance(TimestampedModel):
+    """
+    A model to contain information about account's balance.
+
+    :account: A connection to Account model. account's balance.
+    :main_wallet_EGP: Account's main wallet in EGP.
+    :main_wallet_USD: Account's main wallet in USD.
+    :balance: Account's balance in USD.
+    :trading_result_last_week: Account's last week trading result.
+    :total_achievement: Account's total profit/loss (combined).
+    """
+
+    account = models.OneToOneField(
+        Account, verbose_name='Account', on_delete=models.CASCADE)
+    main_wallet_EGP = models.FloatField(
+        verbose_name='Main Wallet (EGP)', default=0)
+    main_wallet_USD = models.FloatField(
+        verbose_name='Main Wallet (USD)', default=0)
+    balance = models.FloatField(verbose_name='Current Balance', default=0)
+    trading_result_last_week = models.FloatField(
+        verbose_name='Trading Result Last Week', editable=False, blank=True, null=True)
+    total_achievement = models.FloatField(
+        verbose_name='Total Achievement', editable=False, default=0)
+
+    @property
+    def Current_Balance(self):
+        return f'{self.balance} $'
+
+    def __str__(self):
+        return f'{self.account.account_id} | {self.balance}$'
+
+    def save(self, *args, **kwargs):
+        self.account.bundle = Bundle.objects.filter(
+            min_value__lte=self.balance, max_value__gte=self.balance).first()
+        self.account.save()
         return super().save(*args, **kwargs)
 
 
@@ -138,12 +182,18 @@ class TransactionType(TimestampedModel):
 
     :name: Transaction type name.
     """
+    TYPE_CHOICES = (
+        ('Deposit', 'Deposit'),
+        ('Withdrawal', 'Withdrawal'),
+    )
 
     name = models.CharField(verbose_name='Name',
                             max_length=50, primary_key=True)
+    type = models.CharField(verbose_name='Type',
+                            choices=TYPE_CHOICES, max_length=11)
 
     def __str__(self):
-        return self.name
+        return f'{self.type} - {self.name}'
 
 
 class Transaction(TimestampedModel):
@@ -165,11 +215,20 @@ class Transaction(TimestampedModel):
         TransactionType, verbose_name='Transaction Type', on_delete=models.CASCADE)
     amount_EGP = models.FloatField(
         verbose_name='Amount EGP', blank=True, null=True)
-    rate = models.FloatField(verbose_name='USD/EGP rate')
+    deliverd_rate = models.FloatField(verbose_name='USD/EGP rate')
+    real_rate = models.FloatField(verbose_name='USD/EGP real rate')
     amount_USD = models.FloatField(
         verbose_name='Amount USD', blank=True, null=True)
     active = models.BooleanField(verbose_name='Active', default=True)
     paid = models.BooleanField(verbose_name='Paid', default=False)
+
+    @property
+    def type(self):
+        return self.transaction_type.type
+
+    @property
+    def channel(self):
+        return self.transaction_type.name
 
     def clean(self):
         if not self.amount_EGP and not self.amount_USD:
@@ -178,10 +237,11 @@ class Transaction(TimestampedModel):
         return super().clean()
 
     def save(self, *args, **kwargs):
+
         if not self.amount_EGP:
-            self.amount_EGP = self.amount_USD * self.rate
+            self.amount_EGP = self.amount_USD * self.deliverd_rate
         if not self.amount_USD:
-            self.amount_USD = self.amount_EGP / self.rate
+            self.amount_USD = self.amount_EGP / self.deliverd_rate
         return super().save(*args, **kwargs)
 
 
@@ -196,45 +256,17 @@ class Referral(TimestampedModel):
     :bonus_trans: A connection to Transaction. Bonus inactive transaction.
     """
 
-    customer = models.ForeignKey(
+    customer = models.OneToOneField(
         Account, related_name='customer', verbose_name='Customer', on_delete=models.CASCADE)
     referred_by = models.ForeignKey(
         Account, related_name='referred_by', verbose_name='Referred By', on_delete=models.CASCADE)
     referral_bonus = models.FloatField(
-        verbose_name='Referral Bonus', editable=False)
+        verbose_name='Referral Bonus', blank=True, null=True)
     bonus_trans = models.OneToOneField(
-        Transaction, verbose_name='Bonus Transaction', on_delete=models.CASCADE, editable=False, blank=True, null=True)
+        Transaction, verbose_name='Bonus Transaction', on_delete=models.CASCADE, blank=True, null=True)
 
-    def __str__(self):
-        return f'{self.referred_by.customer_id} -> {self.customer.customer_id}'
-
-
-class Balance(TimestampedModel):
-    """
-    A model to contain information about account's balance.
-
-    :account: A connection to Account model. account's balance.
-    :main_wallet_EGP: Account's main wallet in EGP.
-    :main_wallet_USD: Account's main wallet in USD.
-    :balance: Account's balance in USD.
-    :trading_result_last_week: Account's last week trading result.
-    :total_achievement: Account's total profit/loss (combined).
-    """
-
-    account = models.OneToOneField(
-        Account, verbose_name='Account', on_delete=models.CASCADE)
-    main_wallet_EGP = models.FloatField(
-        verbose_name='Main Wallet EGP', default=0)
-    main_wallet_USD = models.FloatField(
-        verbose_name='Main Wallet USD', default=0)
-    balance = models.FloatField(verbose_name='Balance USD', default=0)
-    trading_result_last_week = models.FloatField(
-        verbose_name='Trading Result Last Week', editable=False, blank=True, null=True)
-    total_achievement = models.FloatField(
-        verbose_name='Total Achievement', editable=False, default=0)
-
-    def __str__(self):
-        return f'{self.account.account_id} | {self.balance}$'
+    # def __str__(self):
+    #     return f'{self.referred_by.customer_id} -> {self.customer.customer_id}'
 
 
 class TotalAsset(TimestampedModel):
@@ -248,8 +280,8 @@ class TotalAsset(TimestampedModel):
     total_USD = models.FloatField(verbose_name='Total Trading Amount USD')
     total_EGP = models.FloatField(verbose_name='Total Trading Amount EGP')
 
-    def __str__(self):
-        return self.total_USD
+    # def __str__(self):
+    #     return self.total_USD
 
 
 class Share(TimestampedModel):
@@ -266,14 +298,7 @@ class Share(TimestampedModel):
                               editable=False, default=0)
 
     def __str__(self):
-        return f'{self.account.name} | {self.share}'
-
-    def save(self, *args, **kwargs):
-        total = TotalAsset.objects.filter(id=1).first()
-        balance = Balance.objects.get(account=self.account.id).balance
-        if total:
-            self.share = balance / total * 100
-        return super().save(*args, **kwargs)
+        return f'{self.account.Name} | {self.share}'
 
 
 class SharePL(TimestampedModel):
@@ -305,15 +330,23 @@ class SharePL(TimestampedModel):
         return super().save(*args, **kwargs)
 
 
+################################################################
+
+
 class FinanceType(TimestampedModel):
     """
     A model to contain information about finance type.
 
     :name: Finance type name.
     """
-
+    TYPE_CHOICES = (
+        ('Revenues', 'Revenues'),
+        ('Expenses', 'Expenses'),
+    )
     name = models.CharField(verbose_name='Name',
                             max_length=50, primary_key=True)
+    type = models.CharField(verbose_name='Type',
+                            max_length=50, choices=TYPE_CHOICES)
 
     def __str__(self):
         return self.name
