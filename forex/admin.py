@@ -61,44 +61,67 @@ class AccountAdmin(admin.ModelAdmin):
 
 @admin.register(Balance)
 class BalanceAdmin(admin.ModelAdmin):
-    list_display = ['account', 'main_wallet_EGP', 'main_wallet_USD',
-                    'Current_Balance', 'trading_result_last_week', 'total_achievement']
-    search_fields = ['account']
+    list_display = ['account', 'Main_Wallet', 'Current_Balance',
+                    'trading_result_last_week', 'Last_Week_Percentage',
+                    'total_achievement', 'Total_Achievement_Percentage',
+                    'Share_Percentage']
+    search_fields = ['account__account_id']
 
-    # def has_add_permission(self, request):
-    #     return False
+    def has_add_permission(self, request):
+        return False
 
     # def has_change_permission(self, *args, **kwargs):
     #     return False
 
-    # def has_delete_permission(self, *args, **kwargs):
-    #     return False
+    def has_delete_permission(self, *args, **kwargs):
+        return False
 
 
-# @admin.register(TransactionType)
-# class TransactionTypeAdmin(admin.ModelAdmin):
-#     list_display = ['name']
-#     search_fields = ['type', 'name']
+@admin.register(TransactionChannel)
+class TransactionChannelAdmin(admin.ModelAdmin):
+    list_display = ['id', 'name']
+    search_fields = ['name']
 
 
-# @admin.register(Transaction)
-# class TransactionAdmin(admin.ModelAdmin):
-#     list_display = ['id', 'account', 'channel', 'type',
-#                     'amount_EGP', 'deliverd_rate', 'real_rate', 'amount_USD', 'active', 'paid']
-#     list_filter = ['transaction_type', 'transaction_type__type', 'active', 'paid']
-#     search_fields = ['id', 'account__account_id']
-#     autocomplete_fields = ['account', 'transaction_type']
-#     fieldsets = (
-#         (None, {
-#             "fields": (
-#                 ('account', 'transaction_type'),
-#                 ('amount_EGP', 'deliverd_rate', 'real_rate', 'amount_USD'),
-#                 ('active', 'paid'),
-#             ),
-#         }),
-#     )
+@admin.register(Transaction)
+class TransactionAdmin(admin.ModelAdmin):
+    list_display = ['id', 'balance', 'channel', 'type',
+                    'amount_EGP', 'deliverd_rate', 'real_rate', 'amount_USD', 'paid']
+    list_filter = ['transaction_type',
+                   'transaction_channel', 'transaction_type', 'paid']
+    search_fields = ['id', 'balance__account__account_id']
+    autocomplete_fields = ['balance', 'transaction_channel']
+    fieldsets = (
+        (None, {
+            "fields": (
+                ('balance', 'transaction_type', 'transaction_channel'),
+                ('paid'),
+            ),
+        }),
+        ('Amount', {
+            'fields': (
+                ('amount_EGP'),
+                ('amount_USD'),
+            ),
+        }),
+        ('Rate', {
+            'fields': (
+                ('deliverd_rate'),
+                ('real_rate'),
+            ),
+        }),
+    )
 
 
+@admin.register(TotalAsset)
+class TotalAssetAdmin(admin.ModelAdmin):
+    list_display = ['id', 'total', 'PLs', 'deposits',
+                    'withdrawals', 'Overall_Value', 'Weekend_Date']
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj:
+            return self.readonly_fields + ('total', 'PLs', 'deposits', 'withdrawals', 'Overall_Value', 'Weekend_Date')
+        return self.readonly_fields
 # @admin.register(Referral)
 # class ReferralAdmin(admin.ModelAdmin):
 #     list_display = ['id', 'customer', 'referred_by',
@@ -113,11 +136,6 @@ class BalanceAdmin(admin.ModelAdmin):
 #     #         ),
 #     #     }),
 #     # )
-
-
-# @admin.register(TotalAsset)
-# class TotalAssetAdmin(admin.ModelAdmin):
-#     list_display = ['total_USD', 'total_EGP']
 
 
 # @admin.register(Share)

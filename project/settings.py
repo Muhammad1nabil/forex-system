@@ -137,3 +137,4 @@ MEDIA_ROOT = os.environ.get(
     'MEDIA_ROOT', os.path.join(BASE_DIR, 'media'))
 MEDIA_URL = '/media/'
 
+WEEK_START_DAY = 5
