@@ -95,7 +95,7 @@ class Account(TimestampedModel):
         verbose_name='Date of Birth', blank=True, null=True)
     email = models.EmailField(verbose_name='Email', max_length=254)
     national_id = models.ImageField(
-        upload_to='nationalIDs', verbose_name='National ID')
+        upload_to='nationalIDs', verbose_name='National ID', blank=True, null=True)
     mobile = PhoneNumberField(verbose_name='Mobile Number')
     address = models.CharField(
         verbose_name='Address', max_length=250, blank=True, null=True)
@@ -168,6 +168,8 @@ class Balance(TimestampedModel):
         verbose_name='Total Achievement', editable=False, default=0)
     share = models.FloatField(
         verbose_name='Share Percentage', default=0)
+    profit_per = models.FloatField(
+        verbose_name='Profit Percentage', default=0)
 
     @property
     def Current_Balance(self):
@@ -180,7 +182,7 @@ class Balance(TimestampedModel):
     @property
     def Last_Week_Percentage(self):
         if self.balance - self.trading_result_last_week != 0:
-            return f'{self.trading_result_last_week / (self.balance - self.trading_result_last_week)}%'
+            return f'{round(self.trading_result_last_week / (self.balance - self.trading_result_last_week), 2)}%'
         else:
             return '--%'
 
@@ -200,9 +202,9 @@ class Balance(TimestampedModel):
 
     def save(self, *args, **kwargs):
         self.balance = self.main_wallet + self.total_achievement
-
         self.account.bundle = Bundle.objects.filter(
             min_value__lte=self.main_wallet, max_value__gte=self.main_wallet).first()
+        self.profit_per = (100 - self.account.bundle.bundle_per)/100
         if self.balance <= 0:
             self.balance = 0
             self.main_wallet = 0
@@ -235,6 +237,7 @@ class Transaction(TimestampedModel):
     :rate: USD to EGP rate.
     :amount_USD: Transaction amount in USD.
     :paid: Transaction paid flag.
+    :paid_flag: flag if this transaction has been paid and added to the system before.
     """
 
     TYPE_CHOICES = (
@@ -259,6 +262,8 @@ class Transaction(TimestampedModel):
     date = models.DateField(
         verbose_name='Transaction Date', default=timezone.now)
     paid = models.BooleanField(verbose_name='Paid', default=False)
+    paid_flag = models.BooleanField(
+        verbose_name='paid_flag', default=False, editable=False)
 
     @property
     def type(self):
@@ -267,8 +272,6 @@ class Transaction(TimestampedModel):
     @property
     def channel(self):
         return self.transaction_channel.name
-
-    paid_flag = False
 
     def clean(self):
         if not self.amount_EGP and not self.amount_USD:
@@ -285,13 +288,17 @@ class Transaction(TimestampedModel):
 
     def save(self, *args, **kwargs):
         if self.transaction_type.upper() == 'DEPOSIT' and self.paid and not self.paid_flag:
-            self.paid_flag = True
             self.balance.main_wallet += self.amount_USD
+            deposit_spread = self.amount_USD - (self.amount_EGP / self.real_rate)
+            if deposit_spread > 0:
+                type, _ = FinanceType.objects.get_or_create(name='Deposit Spread', type='Revenues')
+                CompanyFinance.objects.create(finance_type=type, amount=abs(deposit_spread))
+            elif deposit_spread < 0:
+                type, _ = FinanceType.objects.get_or_create(name='Deposit Spread', type='Expenses')
+                CompanyFinance.objects.create(finance_type=type, amount=abs(deposit_spread))
             self.balance.save()
 
-        elif self.transaction_type.upper() == 'WITHDRAWAL' and self.paid and not self.paid_flag:
-            self.paid_flag = True
-
+        if ((self.transaction_type.upper() == 'WITHDRAWAL') and (self.paid and not self.paid_flag)):
             if self.amount_USD > self.balance.main_wallet and self.balance.PL > 0:
                 self.balance.PL -= (self.amount_USD - self.balance.main_wallet)
                 self.balance.main_wallet = self.balance.PL
@@ -303,6 +310,17 @@ class Transaction(TimestampedModel):
             total_asset = TotalAsset.objects.first()
             total_asset.withdrawals += self.amount_USD
             total_asset.save()
+            
+            withdrawal_spread = (self.amount_EGP / self.real_rate) - self.amount_USD
+            if withdrawal_spread > 0:
+                type, _ = FinanceType.objects.get_or_create(name='Withdrawal Spread', type='Revenues')
+                CompanyFinance.objects.create(finance_type=type, amount=abs(withdrawal_spread))
+            elif withdrawal_spread < 0:
+                type, _ = FinanceType.objects.get_or_create(name='Withdrawal Spread', type='Expenses')
+                CompanyFinance.objects.create(finance_type=type, amount=abs(withdrawal_spread))
+
+        if self.paid:
+            self.paid_flag = True
         return super().save(*args, **kwargs)
 
 
@@ -338,60 +356,91 @@ class TotalAsset(TimestampedModel):
             last_friday = (self.created_at.date()
                            - timedelta(days=self.created_at.weekday())
                            + timedelta(days=4))
-            print(last_friday)
         return last_friday
 
     def __str__(self):
         return f'{self.total}$'
 
+    old_withdrawals = 0
+
     def save(self, *args, **kwargs):
-        deposits = 0
+        deposits = float()
+        # if this the first time save function is called and not the first object
         if not self.id and TotalAsset.objects.first():
             last_total_asset = TotalAsset.objects.first()
             self.PLs = self.total - last_total_asset.total
+            # update trading result last week with new account profit cut
+            Balance.objects.update(trading_result_last_week=F(
+                'share') * F('profit_per') * self.PLs)
+            # add trading result last week to total achievement and to PL
+            # update balance with new PL values
+            Balance.objects.update(total_achievement=F('total_achievement') + F(
+                'trading_result_last_week'),
+                PL=F('PL') + F('trading_result_last_week'),
+                balance=F('PL') + F('main_wallet'))
+            # get new deposits to add them to new total asset
             deposits = Transaction.objects.filter(
                 created_at__gt=last_total_asset.created_at,
                 transaction_type='Deposit',
                 paid=True).aggregate(Sum('amount_USD'))['amount_USD__sum']
-        elif not TotalAsset.objects.first():
+            self.deposits = round(deposits, 2) if deposits else 0
+            self.total += self.deposits
+        # if this is the first object
+        elif not self.id and not TotalAsset.objects.first():
             self.total = 0
+            self.total = Balance.objects.all().aggregate(Sum('main_wallet'))['main_wallet__sum']
             deposits = Transaction.objects.filter(
                 transaction_type='Deposit',
                 paid=True).aggregate(Sum('amount_USD'))['amount_USD__sum']
-        
-        self.deposits = round(deposits, 2)
-        self.total = self.total + self.deposits - self.withdrawals
+            self.deposits = round(deposits, 2) if deposits else 0
+            # create share percentage for the first time
+            if self.total != 0:
+                Balance.objects.update(share=F('balance') / self.total)
+            self.total += self.deposits
+        if self.old_withdrawals != self.withdrawals:
+            self.total -= (self.withdrawals - self.old_withdrawals)
+            self.old_withdrawals = self.withdrawals
+
+        # update share percentages according to new balance
         Balance.objects.update(share=F('balance') / self.total)
         return super().save(*args, **kwargs)
 
 
-class SharePL(TimestampedModel):
+class FinanceType(TimestampedModel):
     """
-    A model to contain information about share profit/loss.
+    A model to contain information about finance type.
 
-    :share: A coonection to Sccount model. Share which a PL belongs to.
-    :share_cut: Total share cut.
-    :bundle_cut: Bundle cut amount.
-    :account_cut: Account cut amount.
+    :name: Finance type name.
     """
-
-    share = models.ForeignKey(
-        Balance, verbose_name='Share', on_delete=models.CASCADE)
-    share_cut = models.FloatField(
-        verbose_name='Total Share Cut USD', editable=False)
-    bundle_cut = models.FloatField(
-        verbose_name='Bundle Cut USD', editable=False)
-    account_cut = models.FloatField(
-        verbose_name='Account Cut USD', editable=False)
+    TYPE_CHOICES = (
+        ('Revenues', 'Revenues'),
+        ('Expenses', 'Expenses'),
+    )
+    name = models.CharField(verbose_name='Name', max_length=50)
+    type = models.CharField(verbose_name='Type',
+                            max_length=50, choices=TYPE_CHOICES)
 
     def __str__(self):
-        return f'{self.share} | {self.share_cut}'
+        return f'{self.name} | {self.type}'
+    
+    class Meta:
+        unique_together = [['name', 'type']]
 
-    def save(self, *args, **kwargs):
-        bundle_per = self.share.account.bundle.bundle_per
-        self.bundle_cut = bundle_per / 100 * self.share_cut
-        self.account_cut = self.share_cut - self.bundle_cut
-        return super().save(*args, **kwargs)
+
+class CompanyFinance(TimestampedModel):
+    """
+    A model to contain information about company profit/loss.
+
+    :finance_type: A connection to FinanceType model. Finance type.
+    :amount: Finance amount in USD.
+    """
+
+    finance_type = models.ForeignKey(
+        FinanceType, verbose_name='Finance Type', on_delete=models.CASCADE)
+    amount = models.FloatField(verbose_name='Amount USD')
+
+
+
 # class Referral(TimestampedModel):
 #     """
 #     A model to contain information about referral.
@@ -434,38 +483,6 @@ class SharePL(TimestampedModel):
 
 
 # ################################################################
-
-
-# class FinanceType(TimestampedModel):
-#     """
-#     A model to contain information about finance type.
-
-#     :name: Finance type name.
-#     """
-#     TYPE_CHOICES = (
-#         ('Revenues', 'Revenues'),
-#         ('Expenses', 'Expenses'),
-#     )
-#     name = models.CharField(verbose_name='Name',
-#                             max_length=50, primary_key=True)
-#     type = models.CharField(verbose_name='Type',
-#                             max_length=50, choices=TYPE_CHOICES)
-
-#     def __str__(self):
-#         return self.name
-
-
-# class CompanyFinance(TimestampedModel):
-#     """
-#     A model to contain information about company profit/loss.
-
-#     :finance_type: A connection to FinanceType model. Finance type.
-#     :amount: Finance amount in USD.
-#     """
-
-#     finance_type = models.ForeignKey(
-#         FinanceType, verbose_name='Finance Type', on_delete=models.CASCADE)
-#     amount = models.FloatField(verbose_name='Amount USD')
 
 
 # class Stockholder(TimestampedModel):

@@ -122,6 +122,8 @@ class TotalAssetAdmin(admin.ModelAdmin):
         if obj:
             return self.readonly_fields + ('total', 'PLs', 'deposits', 'withdrawals', 'Overall_Value', 'Weekend_Date')
         return self.readonly_fields
+
+
 # @admin.register(Referral)
 # class ReferralAdmin(admin.ModelAdmin):
 #     list_display = ['id', 'customer', 'referred_by',
@@ -138,38 +140,17 @@ class TotalAssetAdmin(admin.ModelAdmin):
 #     # )
 
 
-# @admin.register(Share)
-# class ShareAdmin(admin.ModelAdmin):
-#     list_display = ['account', 'share']
-#     search_fields = ['account__account_id']
-
-#     # def has_add_permission(self, request):
-#     #     return False
-
-#     # def has_change_permission(self, *args, **kwargs):
-#     #     return False
-
-#     # def has_delete_permission(self, *args, **kwargs):
-#     #     return False
+@admin.register(FinanceType)
+class FinanceTypeAdmin(admin.ModelAdmin):
+    list_display = ['name', 'type']
+    search_fields = ['name', 'type']
 
 
-# @admin.register(SharePL)
-# class SharePLAdmin(admin.ModelAdmin):
-#     list_display = ['share', 'share_cut', 'bundle_cut', 'account_cut']
-#     search_fields = ['share__account__account_id']
-
-
-# @admin.register(FinanceType)
-# class FinanceTypeAdmin(admin.ModelAdmin):
-#     list_display = ['name']
-#     search_fields = ['name']
-
-
-# @admin.register(CompanyFinance)
-# class CompanyFinanceAdmin(admin.ModelAdmin):
-#     list_display = ['id', 'finance_type', 'amount']
-#     list_filter = ['finance_type']
-#     search_fields = ['id']
+@admin.register(CompanyFinance)
+class CompanyFinanceAdmin(admin.ModelAdmin):
+    list_display = ['id', 'finance_type', 'amount']
+    list_filter = ['finance_type']
+    search_fields = ['id']
 
 
 # @admin.register(Stockholder)
